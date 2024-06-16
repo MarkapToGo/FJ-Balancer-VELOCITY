@@ -1,0 +1,179 @@
+package de.stylelabor.dev.fjbalancervelocity;
+
+import com.google.inject.Inject;
+import com.velocitypowered.api.event.Subscribe;
+import com.velocitypowered.api.event.connection.DisconnectEvent;
+import com.velocitypowered.api.event.connection.PostLoginEvent;
+import com.velocitypowered.api.event.proxy.ProxyInitializeEvent;
+import com.velocitypowered.api.plugin.Plugin;
+import com.velocitypowered.api.proxy.Player;
+import com.velocitypowered.api.proxy.ProxyServer;
+import com.velocitypowered.api.proxy.server.RegisteredServer;
+import org.slf4j.Logger;
+
+import org.yaml.snakeyaml.Yaml;
+
+import java.io.*;
+import java.util.*;
+
+@Plugin(
+        id = "fj-balancer-velocity",
+        name = "FJ-Balancer-VELOCITY",
+        version = "0.1"
+)
+public class FJ_Balancer_VELOCITY {
+
+    @Inject
+    private Logger logger;
+
+    @Inject
+    private ProxyServer server;
+
+    private Set<UUID> joinedPlayers;
+    private Map<UUID, String> lastServerData;
+    private File joinedPlayersFile = new File("plugins/Markap-FJ-BALANCER/joinedPlayers.yml");
+    private File lastServerFile = new File("plugins/Markap-FJ-BALANCER/last-server-data.yml");
+
+    @Subscribe
+    public void onProxyInitialization(ProxyInitializeEvent event) {
+
+        server.getCommandManager().register("fjv-reload", new ReloadCommand(this, logger));
+        server.getCommandManager().register("stylelabor-server", new StylelaborServerCommand(this, logger));
+
+        logger.info("\n################################\n##                            ##\n##   FJ Balancer [Velocity]   ##\n##      coded by Markap       ##\n##                            ##\n################################");
+        File dir = new File("plugins/Markap-FJ-BALANCER");
+        if (!dir.exists()) {
+            boolean dirCreated = dir.mkdirs(); // This creates the directory if it doesn't exist
+            if (!dirCreated) {
+                logger.error("Failed to create directory");
+                return;
+            }
+        }
+        joinedPlayersFile = new File(dir, "joinedPlayers.yml");
+        lastServerFile = new File(dir, "last-server-data.yml");
+
+        joinedPlayers = new HashSet<>(); // Initialize joinedPlayers to an empty set
+        lastServerData = new HashMap<>(); // Initialize lastServerData to an empty map
+
+        if (joinedPlayersFile.exists()) {
+            try (FileReader reader = new FileReader(joinedPlayersFile)) {
+                Yaml yaml = new Yaml();
+                Set<UUID> loadedPlayers = yaml.load(reader);
+                if (loadedPlayers != null) {
+                    joinedPlayers.addAll(loadedPlayers);
+                }
+                logger.info("Loaded joined players from file");
+            } catch (IOException e) {
+                logger.error("Failed to load joined players", e);
+            }
+        } else {
+            logger.info("File does not exist, no players loaded");
+        }
+
+        if (lastServerFile.exists()) {
+            try (FileReader reader = new FileReader(lastServerFile)) {
+                Yaml yaml = new Yaml();
+                Map<UUID, String> loadedLastServerData = yaml.load(reader);
+                if (loadedLastServerData != null) {
+                    lastServerData.putAll(loadedLastServerData);
+                }
+                logger.info("Loaded last server data from file");
+            } catch (IOException e) {
+                logger.error("Failed to load last server data", e);
+            }
+        } else {
+            logger.info("File does not exist, no last server data loaded");
+        }
+    }
+
+
+    public File getJoinedPlayersFile() {
+        return joinedPlayersFile;
+    }
+
+    public File getLastServerFile() {
+        return lastServerFile;
+    }
+
+    public void setJoinedPlayers(Set<UUID> joinedPlayers) {
+        this.joinedPlayers = joinedPlayers;
+    }
+
+    public void setLastServerData(Map<UUID, String> lastServerData) {
+        this.lastServerData = lastServerData;
+    }
+
+    public Map<UUID, String> getLastServerData() {
+        return this.lastServerData;
+    }
+
+    public ProxyServer getServer() {
+        return this.server;
+    }
+
+    public void saveLastServerData() {
+        try (FileWriter writer = new FileWriter(lastServerFile)) {
+            Yaml yaml = new Yaml();
+            yaml.dump(lastServerData, writer);
+            logger.info("Saved last server data to file.");
+        } catch (IOException e) {
+            logger.error("Failed to save last server data", e);
+        }
+    }
+
+
+
+    @Subscribe
+    public void onPlayerDisconnect(DisconnectEvent event) {
+        Player player = event.getPlayer();
+        player.getCurrentServer().ifPresent(serverConnection -> {
+            String serverName = serverConnection.getServerInfo().getName();
+            lastServerData.put(player.getUniqueId(), serverName);
+            try (FileWriter writer = new FileWriter(lastServerFile)) {
+                Yaml yaml = new Yaml();
+                yaml.dump(lastServerData, writer);
+                //noinspection LoggingSimilarMessage
+                logger.info("Saved last server data to file. - onPlayerDisconnect");
+            } catch (IOException e) {
+                logger.error("Failed to save last server data", e);
+            }
+        });
+    }
+
+
+    @Subscribe
+    public void onPlayerJoin(PostLoginEvent event) {
+        Player player = event.getPlayer();
+        if (!joinedPlayers.contains(player.getUniqueId())) {
+            joinedPlayers.add(player.getUniqueId());
+            logger.info("Player {} joined for the first time", player.getUsername());
+
+            Optional<RegisteredServer> minPlayerServer = server.getAllServers().stream()
+                    .min(Comparator.comparingInt(server2 -> server2.getPlayersConnected().size()));
+            minPlayerServer.ifPresent(server -> {
+                player.createConnectionRequest(server).fireAndForget();
+                logger.info("Player {} sent to server {}", player.getUsername(), server.getServerInfo().getName());
+            });
+
+            if (!joinedPlayers.isEmpty()) {
+                try (FileWriter writer = new FileWriter(joinedPlayersFile)) {
+                    Yaml yaml = new Yaml();
+                    yaml.dump(joinedPlayers, writer);
+                    logger.info("Saved joined players to file");
+                } catch (IOException e) {
+                    logger.error("Failed to save joined players", e);
+                }
+            }
+        } else {
+            logger.info("Player {} has already joined before", player.getUsername());
+            String lastServer = lastServerData.get(player.getUniqueId());
+            if (lastServer != null) {
+                Optional<RegisteredServer> registeredServer = server.getServer(lastServer);
+                registeredServer.ifPresent(server -> {
+                    player.createConnectionRequest(server).fireAndForget();
+                    logger.info("Player {} sent to last server {}", player.getUsername(), server.getServerInfo().getName());
+                });
+            }
+        }
+    }
+}
