@@ -3,6 +3,7 @@ package de.stylelabor.dev.fjbalancervelocity;
 import com.google.inject.Inject;
 import com.velocitypowered.api.event.Subscribe;
 import com.velocitypowered.api.event.connection.DisconnectEvent;
+import java.util.concurrent.TimeUnit;
 import com.velocitypowered.api.event.connection.PostLoginEvent;
 import com.velocitypowered.api.event.proxy.ProxyInitializeEvent;
 import com.velocitypowered.api.plugin.Plugin;
@@ -16,6 +17,7 @@ import org.yaml.snakeyaml.Yaml;
 import java.io.*;
 import java.util.*;
 
+@SuppressWarnings("ALL")
 @Plugin(
         id = "fj-balancer-velocity",
         name = "FJ-Balancer-VELOCITY",
@@ -36,14 +38,28 @@ public class FJ_Balancer_VELOCITY {
 
     @Subscribe
     public void onProxyInitialization(ProxyInitializeEvent event) {
+        // Unregister the default /server command
+        server.getCommandManager().unregister("server");
 
+        // Register custom commands
         server.getCommandManager().register("fjv-reload", new ReloadCommand(this, logger));
         server.getCommandManager().register("stylelabor-server", new StylelaborServerCommand(this, logger));
+        server.getCommandManager().register("server", new StylelaborServerCommand(this, logger));
+
+        // Unregister default server connection event
+        server.getEventManager().unregisterListeners(this);
 
         logger.info("\n################################\n##                            ##\n##   FJ Balancer [Velocity]   ##\n##      coded by Markap       ##\n##                            ##\n################################");
+
+        // Load joined players and last server data
+        loadJoinedPlayers();
+        loadLastServerData();
+    }
+
+    private void loadJoinedPlayers() {
         File dir = new File("plugins/Markap-FJ-BALANCER");
         if (!dir.exists()) {
-            boolean dirCreated = dir.mkdirs(); // This creates the directory if it doesn't exist
+            boolean dirCreated = dir.mkdirs();
             if (!dirCreated) {
                 logger.error("Failed to create directory");
                 return;
@@ -64,25 +80,36 @@ public class FJ_Balancer_VELOCITY {
                 }
                 logger.info("Loaded joined players from file");
             } catch (IOException e) {
-                logger.error("Failed to load joined players", e);
+                logger.info("Failed to load joined players", e);
             }
         } else {
             logger.info("File does not exist, no players loaded");
         }
+    }
 
+    private void loadLastServerData() {
         if (lastServerFile.exists()) {
             try (FileReader reader = new FileReader(lastServerFile)) {
                 Yaml yaml = new Yaml();
                 Map<UUID, String> loadedLastServerData = yaml.load(reader);
                 if (loadedLastServerData != null) {
                     lastServerData.putAll(loadedLastServerData);
+                    logger.info("Loaded last server data from file");
+                } else {
+                    logger.info("Loaded last server data is null");
                 }
-                logger.info("Loaded last server data from file");
             } catch (IOException e) {
-                logger.error("Failed to load last server data", e);
+                logger.info("Failed to load last server data", e);
             }
         } else {
             logger.info("File does not exist, no last server data loaded");
+        }
+
+        // Additional logging to verify the content of lastServerData
+        if (lastServerData.isEmpty()) {
+            logger.info("lastServerData is empty after loading from file");
+        } else {
+            logger.info("lastServerData contains {} entries after loading from file", lastServerData.size());
         }
     }
 
@@ -117,11 +144,19 @@ public class FJ_Balancer_VELOCITY {
             yaml.dump(lastServerData, writer);
             logger.info("Saved last server data to file.");
         } catch (IOException e) {
-            logger.error("Failed to save last server data", e);
+            logger.info("Failed to save last server data", e);
         }
     }
 
-
+    private void saveJoinedPlayers() {
+        try (FileWriter writer = new FileWriter(joinedPlayersFile)) {
+            Yaml yaml = new Yaml();
+            yaml.dump(joinedPlayers, writer);
+            logger.info("Saved joined players to file");
+        } catch (IOException e) {
+            logger.info("Failed to save joined players", e);
+        }
+    }
 
     @Subscribe
     public void onPlayerDisconnect(DisconnectEvent event) {
@@ -135,44 +170,74 @@ public class FJ_Balancer_VELOCITY {
                 //noinspection LoggingSimilarMessage
                 logger.info("Saved last server data to file. - onPlayerDisconnect");
             } catch (IOException e) {
-                logger.error("Failed to save last server data", e);
+                logger.info("Failed to save last server data", e);
             }
         });
     }
 
 
+    @SuppressWarnings("LoggingSimilarMessage")
     @Subscribe
     public void onPlayerJoin(PostLoginEvent event) {
         Player player = event.getPlayer();
-        if (!joinedPlayers.contains(player.getUniqueId())) {
-            joinedPlayers.add(player.getUniqueId());
-            logger.info("Player {} joined for the first time", player.getUsername());
+        UUID playerId = player.getUniqueId();
+        String playerName = player.getUsername();
+
+        if (!joinedPlayers.contains(playerId)) {
+            joinedPlayers.add(playerId);
+            logger.info("Player {} joined for the first time", playerName);
 
             Optional<RegisteredServer> minPlayerServer = server.getAllServers().stream()
                     .min(Comparator.comparingInt(server2 -> server2.getPlayersConnected().size()));
-            minPlayerServer.ifPresent(server -> {
-                player.createConnectionRequest(server).fireAndForget();
-                logger.info("Player {} sent to server {}", player.getUsername(), server.getServerInfo().getName());
-            });
-
-            if (!joinedPlayers.isEmpty()) {
-                try (FileWriter writer = new FileWriter(joinedPlayersFile)) {
-                    Yaml yaml = new Yaml();
-                    yaml.dump(joinedPlayers, writer);
-                    logger.info("Saved joined players to file");
-                } catch (IOException e) {
-                    logger.error("Failed to save joined players", e);
-                }
+            if (minPlayerServer.isPresent()) {
+                RegisteredServer targetServer = minPlayerServer.get();
+                server.getScheduler().buildTask(this, () -> {
+                    player.createConnectionRequest(targetServer).fireAndForget();
+                    logger.info("Player {} sent to server {}", playerName, targetServer.getServerInfo().getName());
+                }).delay(1, TimeUnit.SECONDS).schedule();
+            } else {
+                logger.info("No available servers to send player {}", playerName);
             }
+
+            saveJoinedPlayers();
         } else {
-            logger.info("Player {} has already joined before", player.getUsername());
-            String lastServer = lastServerData.get(player.getUniqueId());
+            logger.info("Player {} has already joined before", playerName);
+            String lastServer = lastServerData.get(playerId);
             if (lastServer != null) {
                 Optional<RegisteredServer> registeredServer = server.getServer(lastServer);
-                registeredServer.ifPresent(server -> {
-                    player.createConnectionRequest(server).fireAndForget();
-                    logger.info("Player {} sent to last server {}", player.getUsername(), server.getServerInfo().getName());
-                });
+                if (registeredServer.isPresent()) {
+                    RegisteredServer targetServer = registeredServer.get();
+                    server.getScheduler().buildTask(this, () -> {
+                        player.createConnectionRequest(targetServer).fireAndForget();
+                        logger.info("Player {} sent to last server {}", playerName, targetServer.getServerInfo().getName());
+                    }).delay(1, TimeUnit.SECONDS).schedule();
+                } else {
+                    logger.info("Last server {} for player {} not found, sending to server with minimum players", lastServer, playerName);
+                    Optional<RegisteredServer> minPlayerServer = server.getAllServers().stream()
+                            .min(Comparator.comparingInt(server2 -> server2.getPlayersConnected().size()));
+                    if (minPlayerServer.isPresent()) {
+                        RegisteredServer targetServer = minPlayerServer.get();
+                        server.getScheduler().buildTask(this, () -> {
+                            player.createConnectionRequest(targetServer).fireAndForget();
+                            logger.info("Player {} sent to server {}", playerName, targetServer.getServerInfo().getName());
+                        }).delay(1, TimeUnit.SECONDS).schedule();
+                    } else {
+                        logger.info("No available servers to send player {}", playerName);
+                    }
+                }
+            } else {
+                logger.info("No last server data found for player {}, sending to server with minimum players", playerName);
+                Optional<RegisteredServer> minPlayerServer = server.getAllServers().stream()
+                        .min(Comparator.comparingInt(server2 -> server2.getPlayersConnected().size()));
+                if (minPlayerServer.isPresent()) {
+                    RegisteredServer targetServer = minPlayerServer.get();
+                    server.getScheduler().buildTask(this, () -> {
+                        player.createConnectionRequest(targetServer).fireAndForget();
+                        logger.info("Player {} sent to server {}", playerName, targetServer.getServerInfo().getName());
+                    }).delay(1, TimeUnit.SECONDS).schedule();
+                } else {
+                    logger.info("No available servers to send player {}", playerName);
+                }
             }
         }
     }
