@@ -3,19 +3,23 @@ package de.stylelabor.dev.fjbalancervelocity;
 import com.google.inject.Inject;
 import com.velocitypowered.api.event.Subscribe;
 import com.velocitypowered.api.event.connection.DisconnectEvent;
-import java.util.concurrent.TimeUnit;
 import com.velocitypowered.api.event.connection.PostLoginEvent;
+import com.velocitypowered.api.event.player.ServerPreConnectEvent;
 import com.velocitypowered.api.event.proxy.ProxyInitializeEvent;
 import com.velocitypowered.api.plugin.Plugin;
 import com.velocitypowered.api.proxy.Player;
 import com.velocitypowered.api.proxy.ProxyServer;
 import com.velocitypowered.api.proxy.server.RegisteredServer;
+import net.kyori.adventure.text.Component;
 import org.slf4j.Logger;
-
 import org.yaml.snakeyaml.Yaml;
 
-import java.io.*;
+import java.io.File;
+import java.io.FileReader;
+import java.io.FileWriter;
+import java.io.IOException;
 import java.util.*;
+import java.util.concurrent.TimeUnit;
 
 @SuppressWarnings("ALL")
 @Plugin(
@@ -39,12 +43,12 @@ public class FJ_Balancer_VELOCITY {
     @Subscribe
     public void onProxyInitialization(ProxyInitializeEvent event) {
         // Unregister the default /server command
-        server.getCommandManager().unregister("server");
+        // server.getCommandManager().unregister("server");
 
         // Register custom commands
         server.getCommandManager().register("fjv-reload", new ReloadCommand(this, logger));
         server.getCommandManager().register("stylelabor-server", new StylelaborServerCommand(this, logger));
-        server.getCommandManager().register("server", new StylelaborServerCommand(this, logger));
+        // server.getCommandManager().register("server", new StylelaborServerCommand(this, logger));
 
         // Unregister default server connection event
         server.getEventManager().unregisterListeners(this);
@@ -54,6 +58,31 @@ public class FJ_Balancer_VELOCITY {
         // Load joined players and last server data
         loadJoinedPlayers();
         loadLastServerData();
+    }
+
+    @Subscribe
+    public void onServerPreConnect(ServerPreConnectEvent event) {
+        Player player = event.getPlayer();
+        UUID playerId = player.getUniqueId();
+        String playerName = player.getUsername();
+
+        // Cancel the default server connection
+        event.setResult(ServerPreConnectEvent.ServerResult.denied());
+
+        // Handle server connection logic in your plugin
+        String lastServer = lastServerData.get(playerId);
+        if (lastServer != null) {
+            Optional<RegisteredServer> registeredServer = server.getServer(lastServer);
+            if (registeredServer.isPresent()) {
+                RegisteredServer targetServer = registeredServer.get();
+                player.createConnectionRequest(targetServer).fireAndForget();
+                logger.info("Player {} sent to last server {}", playerName, targetServer.getServerInfo().getName());
+            } else {
+                logger.info("Last server {} for player {} not found", lastServer, playerName);
+            }
+        } else {
+            logger.info("No last server data found for player {}", playerName);
+        }
     }
 
     private void loadJoinedPlayers() {
@@ -113,7 +142,6 @@ public class FJ_Balancer_VELOCITY {
         }
     }
 
-
     public File getJoinedPlayersFile() {
         return joinedPlayersFile;
     }
@@ -136,6 +164,24 @@ public class FJ_Balancer_VELOCITY {
 
     public ProxyServer getServer() {
         return this.server;
+    }
+
+    private int maxRetries = 3;
+    private int retryDelaySeconds = 5;
+    public int getMaxRetries() {
+        return maxRetries;
+    }
+
+    public void setMaxRetries(int maxRetries) {
+        this.maxRetries = maxRetries;
+    }
+
+    public int getRetryDelaySeconds() {
+        return retryDelaySeconds;
+    }
+
+    public void setRetryDelaySeconds(int retryDelaySeconds) {
+        this.retryDelaySeconds = retryDelaySeconds;
     }
 
     public void saveLastServerData() {
@@ -183,6 +229,9 @@ public class FJ_Balancer_VELOCITY {
         UUID playerId = player.getUniqueId();
         String playerName = player.getUsername();
 
+        // Send a welcome message to the player
+        player.sendMessage(Component.text("Welcome " + playerName + "! You can switch servers using /stylelabor-server <server>."));
+
         if (!joinedPlayers.contains(playerId)) {
             joinedPlayers.add(playerId);
             logger.info("Player {} joined for the first time", playerName);
@@ -191,10 +240,7 @@ public class FJ_Balancer_VELOCITY {
                     .min(Comparator.comparingInt(server2 -> server2.getPlayersConnected().size()));
             if (minPlayerServer.isPresent()) {
                 RegisteredServer targetServer = minPlayerServer.get();
-                server.getScheduler().buildTask(this, () -> {
-                    player.createConnectionRequest(targetServer).fireAndForget();
-                    logger.info("Player {} sent to server {}", playerName, targetServer.getServerInfo().getName());
-                }).delay(1, TimeUnit.SECONDS).schedule();
+                scheduleServerConnection(player, targetServer, getMaxRetries(), getRetryDelaySeconds());
             } else {
                 logger.info("No available servers to send player {}", playerName);
             }
@@ -207,20 +253,14 @@ public class FJ_Balancer_VELOCITY {
                 Optional<RegisteredServer> registeredServer = server.getServer(lastServer);
                 if (registeredServer.isPresent()) {
                     RegisteredServer targetServer = registeredServer.get();
-                    server.getScheduler().buildTask(this, () -> {
-                        player.createConnectionRequest(targetServer).fireAndForget();
-                        logger.info("Player {} sent to last server {}", playerName, targetServer.getServerInfo().getName());
-                    }).delay(1, TimeUnit.SECONDS).schedule();
+                    scheduleServerConnection(player, targetServer, getMaxRetries(), getRetryDelaySeconds());
                 } else {
                     logger.info("Last server {} for player {} not found, sending to server with minimum players", lastServer, playerName);
                     Optional<RegisteredServer> minPlayerServer = server.getAllServers().stream()
                             .min(Comparator.comparingInt(server2 -> server2.getPlayersConnected().size()));
                     if (minPlayerServer.isPresent()) {
                         RegisteredServer targetServer = minPlayerServer.get();
-                        server.getScheduler().buildTask(this, () -> {
-                            player.createConnectionRequest(targetServer).fireAndForget();
-                            logger.info("Player {} sent to server {}", playerName, targetServer.getServerInfo().getName());
-                        }).delay(1, TimeUnit.SECONDS).schedule();
+                        scheduleServerConnection(player, targetServer, getMaxRetries(), getRetryDelaySeconds());
                     } else {
                         logger.info("No available servers to send player {}", playerName);
                     }
@@ -231,14 +271,27 @@ public class FJ_Balancer_VELOCITY {
                         .min(Comparator.comparingInt(server2 -> server2.getPlayersConnected().size()));
                 if (minPlayerServer.isPresent()) {
                     RegisteredServer targetServer = minPlayerServer.get();
-                    server.getScheduler().buildTask(this, () -> {
-                        player.createConnectionRequest(targetServer).fireAndForget();
-                        logger.info("Player {} sent to server {}", playerName, targetServer.getServerInfo().getName());
-                    }).delay(1, TimeUnit.SECONDS).schedule();
+                    scheduleServerConnection(player, targetServer, getMaxRetries(), getRetryDelaySeconds());
                 } else {
                     logger.info("No available servers to send player {}", playerName);
                 }
             }
         }
+    }
+
+    private void scheduleServerConnection(Player player, RegisteredServer targetServer, int retries, int delaySeconds) {
+        server.getScheduler().buildTask(this, () -> {
+            try {
+                player.createConnectionRequest(targetServer).fireAndForget();
+                logger.info("Player {} sent to server {}", player.getUsername(), targetServer.getServerInfo().getName());
+            } catch (Exception e) {
+                logger.error("Failed to send player {} to server {}, retries left: {}", player.getUsername(), targetServer.getServerInfo().getName(), retries, e);
+                if (retries > 0) {
+                    scheduleServerConnection(player, targetServer, retries - 1, delaySeconds);
+                } else {
+                    logger.error("Exhausted all retries for player {} to server {}", player.getUsername(), targetServer.getServerInfo().getName());
+                }
+            }
+        }).delay(delaySeconds, TimeUnit.SECONDS).schedule();
     }
 }
