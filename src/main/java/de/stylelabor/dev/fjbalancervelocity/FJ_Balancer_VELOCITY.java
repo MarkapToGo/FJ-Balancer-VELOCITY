@@ -49,10 +49,11 @@ public class FJ_Balancer_VELOCITY {
         // Register custom commands
         server.getCommandManager().register("fjv-reload", new ReloadCommand(this, logger));
         server.getCommandManager().register("stylelabor-server", new StylelaborServerCommand(this, logger));
+        server.getCommandManager().register("switch-server", new StylelaborServerCommand(this, logger));
         // server.getCommandManager().register("server", new StylelaborServerCommand(this, logger));
 
         // Unregister default server connection event
-        server.getEventManager().unregisterListeners(this);
+        // server.getEventManager().unregisterListeners(this);
 
         logger.info("\n################################\n##                            ##\n##   FJ Balancer [Velocity]   ##\n##      coded by Markap       ##\n##                            ##\n################################");
 
