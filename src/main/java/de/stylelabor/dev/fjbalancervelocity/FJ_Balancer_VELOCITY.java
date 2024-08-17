@@ -42,6 +42,7 @@ public class FJ_Balancer_VELOCITY {
 
     @Subscribe
     public void onProxyInitialization(ProxyInitializeEvent event) {
+
         // Unregister the default /server command
         // server.getCommandManager().unregister("server");
 
