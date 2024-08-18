@@ -45,7 +45,7 @@ public class StylelaborServerCommand implements SimpleCommand {
         plugin.getServer().getScheduler().buildTask(plugin, () -> {
             plugin.getLastServerData().put(player.getUniqueId(), serverName);
             plugin.saveLastServerData();
-        }).delay(2, TimeUnit.SECONDS).schedule();
+        }).delay(3, TimeUnit.SECONDS).schedule();
     }
 
     @Override

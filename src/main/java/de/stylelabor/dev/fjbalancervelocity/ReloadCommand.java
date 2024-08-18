@@ -52,7 +52,6 @@ public class ReloadCommand implements SimpleCommand {
         } catch (IOException e) {
             logger.error("Failed to reload last server data", e);
         }
-
         plugin.setJoinedPlayers(joinedPlayers);
         plugin.setLastServerData(lastServerData);
     }

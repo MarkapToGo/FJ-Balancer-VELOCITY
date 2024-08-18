@@ -9,11 +9,15 @@ import com.velocitypowered.api.plugin.Plugin;
 import com.velocitypowered.api.proxy.Player;
 import com.velocitypowered.api.proxy.ProxyServer;
 import com.velocitypowered.api.proxy.server.RegisteredServer;
+import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
 import org.slf4j.Logger;
-
 import org.yaml.snakeyaml.Yaml;
 
-import java.io.*;
+import java.io.File;
+import java.io.FileReader;
+import java.io.FileWriter;
+import java.io.IOException;
 import java.util.*;
 
 @Plugin(
@@ -39,8 +43,10 @@ public class FJ_Balancer_VELOCITY {
 
         server.getCommandManager().register("fjv-reload", new ReloadCommand(this, logger));
         server.getCommandManager().register("stylelabor-server", new StylelaborServerCommand(this, logger));
+        server.getCommandManager().register("switch-server", new StylelaborServerCommand(this, logger));
 
         logger.info("\n################################\n##                            ##\n##   FJ Balancer [Velocity]   ##\n##      coded by Markap       ##\n##                            ##\n################################");
+
         File dir = new File("plugins/Markap-FJ-BALANCER");
         if (!dir.exists()) {
             boolean dirCreated = dir.mkdirs(); // This creates the directory if it doesn't exist
@@ -86,7 +92,6 @@ public class FJ_Balancer_VELOCITY {
         }
     }
 
-
     public File getJoinedPlayersFile() {
         return joinedPlayersFile;
     }
@@ -121,8 +126,6 @@ public class FJ_Balancer_VELOCITY {
         }
     }
 
-
-
     @Subscribe
     public void onPlayerDisconnect(DisconnectEvent event) {
         Player player = event.getPlayer();
@@ -140,7 +143,6 @@ public class FJ_Balancer_VELOCITY {
         });
     }
 
-
     @Subscribe
     public void onPlayerJoin(PostLoginEvent event) {
         Player player = event.getPlayer();
@@ -148,11 +150,18 @@ public class FJ_Balancer_VELOCITY {
             joinedPlayers.add(player.getUniqueId());
             logger.info("Player {} joined for the first time", player.getUsername());
 
+            String message = "&8[&6StyleLabor&8] &fHello &e&l" + player.getUsername() + "&f, you can change the server with &f&l/stylelabor-server <server>&f!";
+            player.sendMessage(LegacyComponentSerializer.legacyAmpersand().deserialize(message));
+
             Optional<RegisteredServer> minPlayerServer = server.getAllServers().stream()
                     .min(Comparator.comparingInt(server2 -> server2.getPlayersConnected().size()));
             minPlayerServer.ifPresent(server -> {
-                player.createConnectionRequest(server).fireAndForget();
-                logger.info("Player {} sent to server {}", player.getUsername(), server.getServerInfo().getName());
+                if (player.getCurrentServer().isEmpty()) {
+                    player.createConnectionRequest(server).fireAndForget();
+                    logger.info("Player {} sent to server {}", player.getUsername(), server.getServerInfo().getName());
+                } else {
+                    logger.info("Player {} is already connected to a server", player.getUsername());
+                }
             });
 
             if (!joinedPlayers.isEmpty()) {
@@ -170,8 +179,12 @@ public class FJ_Balancer_VELOCITY {
             if (lastServer != null) {
                 Optional<RegisteredServer> registeredServer = server.getServer(lastServer);
                 registeredServer.ifPresent(server -> {
-                    player.createConnectionRequest(server).fireAndForget();
-                    logger.info("Player {} sent to last server {}", player.getUsername(), server.getServerInfo().getName());
+                    if (player.getCurrentServer().isPresent()) {
+                        player.disconnect(Component.text("Transferring you to " + lastServer + "! Please reconnect."));
+                    } else {
+                        player.createConnectionRequest(server).fireAndForget();
+                        logger.info("Player {} sent to last server {}", player.getUsername(), server.getServerInfo().getName());
+                    }
                 });
             }
         }
