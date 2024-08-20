@@ -146,12 +146,13 @@ public class FJ_Balancer_VELOCITY {
     @Subscribe
     public void onPlayerJoin(PostLoginEvent event) {
         Player player = event.getPlayer();
+
+        String message = "&8[&6&lStyleLabor&8] &fHello &e&l" + player.getUsername() + "&f, you can change the server with &f&l/stylelabor-server <server>&f!";
+        player.sendMessage(LegacyComponentSerializer.legacyAmpersand().deserialize(message));
+
         if (!joinedPlayers.contains(player.getUniqueId())) {
             joinedPlayers.add(player.getUniqueId());
             logger.info("Player {} joined for the first time", player.getUsername());
-
-            String message = "&8[&6StyleLabor&8] &fHello &e&l" + player.getUsername() + "&f, you can change the server with &f&l/stylelabor-server <server>&f!";
-            player.sendMessage(LegacyComponentSerializer.legacyAmpersand().deserialize(message));
 
             Optional<RegisteredServer> minPlayerServer = server.getAllServers().stream()
                     .min(Comparator.comparingInt(server2 -> server2.getPlayersConnected().size()));
