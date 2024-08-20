@@ -19,6 +19,9 @@ import java.io.FileReader;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.util.*;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 @Plugin(
         id = "fj-balancer-velocity",
@@ -33,6 +36,7 @@ public class FJ_Balancer_VELOCITY {
     @Inject
     private ProxyServer server;
 
+    private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
     private Set<UUID> joinedPlayers;
     private Map<UUID, String> lastServerData;
     private File joinedPlayersFile = new File("plugins/Markap-FJ-BALANCER/joinedPlayers.yml");
@@ -40,6 +44,9 @@ public class FJ_Balancer_VELOCITY {
 
     @Subscribe
     public void onProxyInitialization(ProxyInitializeEvent event) {
+
+        // Schedule the task to reload data every 15 seconds
+        scheduler.scheduleAtFixedRate(this::reloadDataFromFile, 0, 15, TimeUnit.SECONDS);
 
         server.getCommandManager().register("fjv-reload", new ReloadCommand(this, logger));
         server.getCommandManager().register("stylelabor-server", new StylelaborServerCommand(this, logger));
@@ -143,12 +150,39 @@ public class FJ_Balancer_VELOCITY {
         });
     }
 
+    private void reloadDataFromFile() {
+        try (FileReader reader = new FileReader(joinedPlayersFile)) {
+            Yaml yaml = new Yaml();
+            Set<UUID> loadedPlayers = yaml.load(reader);
+            if (loadedPlayers != null) {
+                joinedPlayers = new HashSet<>(loadedPlayers);
+            }
+            logger.info("[AUTO-RELOAD] Reloaded joined players from file");
+        } catch (IOException e) {
+            logger.error("[AUTO-RELOAD] Failed to reload joined players", e);
+        }
+
+        try (FileReader reader = new FileReader(lastServerFile)) {
+            Yaml yaml = new Yaml();
+            Map<UUID, String> loadedLastServerData = yaml.load(reader);
+            if (loadedLastServerData != null) {
+                lastServerData = new HashMap<>(loadedLastServerData);
+            }
+            logger.info("[AUTO-RELOAD] Reloaded last server data from file");
+        } catch (IOException e) {
+            logger.error("[AUTO-RELOAD] Failed to reload last server data", e);
+        }
+    }
+
+
     @Subscribe
     public void onPlayerJoin(PostLoginEvent event) {
         Player player = event.getPlayer();
 
         String message = "&8[&6&lStyleLabor&8] &fHello &e&l" + player.getUsername() + "&f, you can change the server with &f&l/stylelabor-server <server>&f!";
-        player.sendMessage(LegacyComponentSerializer.legacyAmpersand().deserialize(message));
+
+        // Schedule the message to be sent after 5 seconds
+        scheduler.schedule(() -> player.sendMessage(LegacyComponentSerializer.legacyAmpersand().deserialize(message)), 5, TimeUnit.SECONDS);
 
         if (!joinedPlayers.contains(player.getUniqueId())) {
             joinedPlayers.add(player.getUniqueId());
