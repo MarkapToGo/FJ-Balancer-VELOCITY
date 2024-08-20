@@ -15,9 +15,11 @@ import java.util.stream.Collectors;
 public class StylelaborServerCommand implements SimpleCommand {
 
     private final FJ_Balancer_VELOCITY plugin;
+    private final Logger logger;
 
-    public StylelaborServerCommand(FJ_Balancer_VELOCITY plugin, Logger ignoredLogger) {
+    public StylelaborServerCommand(FJ_Balancer_VELOCITY plugin, Logger logger) {
         this.plugin = plugin;
+        this.logger = logger;
     }
 
     @Override
@@ -38,6 +40,9 @@ public class StylelaborServerCommand implements SimpleCommand {
             invocation.source().sendMessage(Component.text("This command can only be run by a player."));
             return;
         }
+
+        // Log the command usage
+        logger.info("Player {} is switching to server {}", player.getUsername(), serverName);
 
         player.disconnect(Component.text("Transferring you to " + serverName + "! Please reconnect."));
 
