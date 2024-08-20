@@ -151,29 +151,32 @@ public class FJ_Balancer_VELOCITY {
     }
 
     private void reloadDataFromFile() {
-        try (FileReader reader = new FileReader(joinedPlayersFile)) {
-            Yaml yaml = new Yaml();
-            Set<UUID> loadedPlayers = yaml.load(reader);
-            if (loadedPlayers != null) {
-                joinedPlayers = new HashSet<>(loadedPlayers);
+        if (joinedPlayersFile.exists() && lastServerFile.exists()) {
+            try (FileReader reader = new FileReader(joinedPlayersFile)) {
+                Yaml yaml = new Yaml();
+                Set<UUID> loadedPlayers = yaml.load(reader);
+                if (loadedPlayers != null) {
+                    joinedPlayers = new HashSet<>(loadedPlayers);
+                }
+                logger.info("[AUTO-RELOAD] Reloaded joined players from file");
+            } catch (IOException e) {
+                logger.error("[AUTO-RELOAD] Failed to reload joined players", e);
             }
-            logger.info("[AUTO-RELOAD] Reloaded joined players from file");
-        } catch (IOException e) {
-            logger.error("[AUTO-RELOAD] Failed to reload joined players", e);
-        }
 
-        try (FileReader reader = new FileReader(lastServerFile)) {
-            Yaml yaml = new Yaml();
-            Map<UUID, String> loadedLastServerData = yaml.load(reader);
-            if (loadedLastServerData != null) {
-                lastServerData = new HashMap<>(loadedLastServerData);
+            try (FileReader reader = new FileReader(lastServerFile)) {
+                Yaml yaml = new Yaml();
+                Map<UUID, String> loadedLastServerData = yaml.load(reader);
+                if (loadedLastServerData != null) {
+                    lastServerData = new HashMap<>(loadedLastServerData);
+                }
+                logger.info("[AUTO-RELOAD] Reloaded last server data from file");
+            } catch (IOException e) {
+                logger.error("[AUTO-RELOAD] Failed to reload last server data", e);
             }
-            logger.info("[AUTO-RELOAD] Reloaded last server data from file");
-        } catch (IOException e) {
-            logger.error("[AUTO-RELOAD] Failed to reload last server data", e);
+        } else {
+            logger.warn("[AUTO-RELOAD] Skipped reloading because one or both files do not exist");
         }
     }
-
 
     @Subscribe
     public void onPlayerJoin(PostLoginEvent event) {
