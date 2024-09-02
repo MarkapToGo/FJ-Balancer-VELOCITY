@@ -182,7 +182,7 @@ public class FJ_Balancer_VELOCITY {
     public void onPlayerJoin(PostLoginEvent event) {
         Player player = event.getPlayer();
 
-        String message = "&8[&6&lStyleLabor&8] &fHello &e&l" + player.getUsername() + "&f, you can change the server with &f&l/stylelabor-server <server>&f!";
+        String message = "&8[&6&lStyleLabor&8] &fHello &e&l" + player.getUsername() + "&f, you can change the server with &f&l/stylelabor-server <server>&f! When this isn't working, use &6/server <server>&f!";
 
         // Schedule the message to be sent after 5 seconds
         scheduler.schedule(() -> player.sendMessage(LegacyComponentSerializer.legacyAmpersand().deserialize(message)), 5, TimeUnit.SECONDS);
