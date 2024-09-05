@@ -26,7 +26,7 @@ import java.util.concurrent.TimeUnit;
 @Plugin(
         id = "fj-balancer-velocity",
         name = "FJ-Balancer-VELOCITY",
-        version = "0.1"
+        version = "0.2"
 )
 public class FJ_Balancer_VELOCITY {
 
@@ -45,8 +45,8 @@ public class FJ_Balancer_VELOCITY {
     @Subscribe
     public void onProxyInitialization(ProxyInitializeEvent event) {
 
-        // Schedule the task to reload data every 15 seconds
-        scheduler.scheduleAtFixedRate(this::reloadDataFromFile, 0, 15, TimeUnit.SECONDS);
+        // Schedule the task to reload data every minute
+        scheduler.scheduleAtFixedRate(this::reloadDataFromFile, 0, 60, TimeUnit.SECONDS);
 
         server.getCommandManager().register("fjv-reload", new ReloadCommand(this, logger));
         server.getCommandManager().register("stylelabor-server", new StylelaborServerCommand(this, logger));
@@ -181,12 +181,22 @@ public class FJ_Balancer_VELOCITY {
     @Subscribe
     public void onPlayerJoin(PostLoginEvent event) {
         Player player = event.getPlayer();
+        Locale locale = player.getEffectiveLocale();
+        String message;
 
-        String message = "&8[&6&lStyleLabor&8] &fHello &e&l" + player.getUsername() + "&f, you can change the server with &f&l/stylelabor-server <server>&f! When this isn't working, use &6/server <server>&f!";
+        if (locale != null && locale.getLanguage().equals("de")) {
+            message = "&8[&6&lStyleLabor&8] &fHallo &e&l" + player.getUsername() + "&f, du kannst den Server mit &f&l/stylelabor-server <server>&f wechseln! Wenn das nicht funktioniert, benutze &6/server <server>&f!";
+        } else {
+            message = "&8[&6&lStyleLabor&8] &fHello &e&l" + player.getUsername() + "&f, you can change the server with &f&l/stylelabor-server <server>&f! When this isn't working, use &6/server <server>&f!";
+        }
 
         // Schedule the message to be sent after 5 seconds
         scheduler.schedule(() -> player.sendMessage(LegacyComponentSerializer.legacyAmpersand().deserialize(message)), 5, TimeUnit.SECONDS);
 
+        balancePlayerOnFirstJoin(player);
+    }
+
+    private void balancePlayerOnFirstJoin(Player player) {
         if (!joinedPlayers.contains(player.getUniqueId())) {
             joinedPlayers.add(player.getUniqueId());
             logger.info("Player {} joined for the first time", player.getUsername());
@@ -202,15 +212,7 @@ public class FJ_Balancer_VELOCITY {
                 }
             });
 
-            if (!joinedPlayers.isEmpty()) {
-                try (FileWriter writer = new FileWriter(joinedPlayersFile)) {
-                    Yaml yaml = new Yaml();
-                    yaml.dump(joinedPlayers, writer);
-                    logger.info("Saved joined players to file");
-                } catch (IOException e) {
-                    logger.error("Failed to save joined players", e);
-                }
-            }
+            saveJoinedPlayers();
         } else {
             logger.info("Player {} has already joined before", player.getUsername());
             String lastServer = lastServerData.get(player.getUniqueId());
@@ -219,11 +221,44 @@ public class FJ_Balancer_VELOCITY {
                 registeredServer.ifPresent(server -> {
                     if (player.getCurrentServer().isPresent()) {
                         player.disconnect(Component.text("Transferring you to " + lastServer + "! Please reconnect."));
+                        retryConnection(player, server, 10, 5); // Retry 5 times with a 10-second delay
                     } else {
                         player.createConnectionRequest(server).fireAndForget();
                         logger.info("Player {} sent to last server {}", player.getUsername(), server.getServerInfo().getName());
                     }
                 });
+            }
+        }
+    }
+
+    private void retryConnection(Player player, RegisteredServer server, int delaySeconds, int maxRetries) {
+        scheduler.schedule(() -> {
+            if (maxRetries > 0) {
+                player.createConnectionRequest(server).connectWithIndication().thenAccept(success -> {
+                    if (!success) {
+                        logger.warn("Failed to transfer player {} to server {}. Retrying... ({} attempts left)", player.getUsername(), server.getServerInfo().getName(), maxRetries - 1);
+                        player.sendMessage(Component.text("Retrying transfer to " + server.getServerInfo().getName() + "... (" + (maxRetries - 1) + " attempts left)"));
+                        retryConnection(player, server, delaySeconds, maxRetries - 1);
+                    } else {
+                        logger.info("Player {} successfully transferred to server {}", player.getUsername(), server.getServerInfo().getName());
+                        player.sendMessage(Component.text("Successfully transferred to " + server.getServerInfo().getName() + "!"));
+                    }
+                });
+            } else {
+                logger.error("Failed to transfer player {} to server {} after multiple attempts.", player.getUsername(), server.getServerInfo().getName());
+                player.sendMessage(Component.text("Failed to transfer you to " + server.getServerInfo().getName() + " after multiple attempts."));
+            }
+        }, delaySeconds, TimeUnit.SECONDS);
+    }
+
+    private void saveJoinedPlayers() {
+        if (!joinedPlayers.isEmpty()) {
+            try (FileWriter writer = new FileWriter(joinedPlayersFile)) {
+                Yaml yaml = new Yaml();
+                yaml.dump(joinedPlayers, writer);
+                logger.info("Saved joined players to file");
+            } catch (IOException e) {
+                logger.error("Failed to save joined players", e);
             }
         }
     }
