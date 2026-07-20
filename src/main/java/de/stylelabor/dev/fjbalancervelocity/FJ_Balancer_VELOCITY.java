@@ -38,8 +38,8 @@ public class FJ_Balancer_VELOCITY {
     private ProxyServer server;
 
     private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
-    private Set<UUID> joinedPlayers = ConcurrentHashMap.newKeySet();
-    private Map<UUID, String> lastServerData = new ConcurrentHashMap<>();
+    private volatile Set<UUID> joinedPlayers = ConcurrentHashMap.newKeySet();
+    private volatile Map<UUID, String> lastServerData = new ConcurrentHashMap<>();
     private File joinedPlayersFile = new File("plugins/Markap-FJ-BALANCER/joinedPlayers.yml");
     private File lastServerFile = new File("plugins/Markap-FJ-BALANCER/last-server-data.yml");
 
@@ -106,17 +106,19 @@ public class FJ_Balancer_VELOCITY {
     }
 
     public void setJoinedPlayers(Set<UUID> joinedPlayers) {
-        this.joinedPlayers = ConcurrentHashMap.newKeySet();
+        Set<UUID> newSet = ConcurrentHashMap.newKeySet();
         if (joinedPlayers != null) {
-            this.joinedPlayers.addAll(joinedPlayers);
+            newSet.addAll(joinedPlayers);
         }
+        this.joinedPlayers = newSet;
     }
 
     public void setLastServerData(Map<UUID, String> lastServerData) {
-        this.lastServerData = new ConcurrentHashMap<>();
+        Map<UUID, String> newMap = new ConcurrentHashMap<>();
         if (lastServerData != null) {
-            this.lastServerData.putAll(lastServerData);
+            newMap.putAll(lastServerData);
         }
+        this.lastServerData = newMap;
     }
 
     public Map<UUID, String> getLastServerData() {
@@ -127,7 +129,7 @@ public class FJ_Balancer_VELOCITY {
         return this.server;
     }
 
-    public void saveLastServerData() {
+    public synchronized void saveLastServerData() {
         try (FileWriter writer = new FileWriter(lastServerFile)) {
             Yaml yaml = new Yaml();
             yaml.dump(new HashMap<>(lastServerData), writer);
@@ -137,7 +139,7 @@ public class FJ_Balancer_VELOCITY {
         }
     }
 
-    public void saveJoinedPlayers() {
+    public synchronized void saveJoinedPlayers() {
         if (!joinedPlayers.isEmpty()) {
             try (FileWriter writer = new FileWriter(joinedPlayersFile)) {
                 Yaml yaml = new Yaml();
@@ -188,14 +190,15 @@ public class FJ_Balancer_VELOCITY {
         });
     }
 
-    private void reloadDataFromFile() {
+    private synchronized void reloadDataFromFile() {
         if (joinedPlayersFile.exists() && lastServerFile.exists()) {
             try (FileReader reader = new FileReader(joinedPlayersFile)) {
                 Yaml yaml = new Yaml();
                 Set<UUID> loadedPlayers = yaml.load(reader);
                 if (loadedPlayers != null) {
-                    joinedPlayers.clear();
-                    joinedPlayers.addAll(loadedPlayers);
+                    Set<UUID> newJoined = ConcurrentHashMap.newKeySet();
+                    newJoined.addAll(loadedPlayers);
+                    this.joinedPlayers = newJoined;
                 }
                 logger.info("[AUTO-RELOAD] Reloaded joined players from file");
             } catch (IOException e) {
@@ -206,8 +209,8 @@ public class FJ_Balancer_VELOCITY {
                 Yaml yaml = new Yaml();
                 Map<UUID, String> loadedLastServerData = yaml.load(reader);
                 if (loadedLastServerData != null) {
-                    lastServerData.clear();
-                    lastServerData.putAll(loadedLastServerData);
+                    Map<UUID, String> newLastServerData = new ConcurrentHashMap<>(loadedLastServerData);
+                    this.lastServerData = newLastServerData;
                 }
                 logger.info("[AUTO-RELOAD] Reloaded last server data from file");
             } catch (IOException e) {

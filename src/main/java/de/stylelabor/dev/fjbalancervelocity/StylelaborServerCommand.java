@@ -10,7 +10,6 @@ import org.slf4j.Logger;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
-import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 public class StylelaborServerCommand implements SimpleCommand {
@@ -42,7 +41,7 @@ public class StylelaborServerCommand implements SimpleCommand {
             return;
         }
 
-        // Check if the player is already connecting to a server
+        // Check if the player is already connected to this server
         if (player.getCurrentServer().isPresent() && player.getCurrentServer().get().getServerInfo().getName().equals(serverName)) {
             invocation.source().sendMessage(Component.text("You are already connected to " + serverName + "."));
             return;
@@ -51,48 +50,59 @@ public class StylelaborServerCommand implements SimpleCommand {
         // Log the command usage
         logger.info("Player {} is switching to server {}", player.getUsername(), serverName);
 
-        // Schedule a task to save the last server data after a delay
-        plugin.getServer().getScheduler().buildTask(plugin, () -> {
-            plugin.getLastServerData().put(player.getUniqueId(), serverName);
-            plugin.saveLastServerData();
-        }).delay(3, TimeUnit.SECONDS).schedule();
+        RegisteredServer targetServer = serverOptional.get();
 
         // Check the backend server version
-        serverOptional.get().ping().thenAccept(ping -> {
+        targetServer.ping().thenAccept(ping -> {
             String version = ping.getVersion().getName();
             if (version.contains("Neoforge") && version.contains("1.21")) {
                 // Use Velocity send command
-                player.createConnectionRequest(serverOptional.get()).fireAndForget();
-                sendMessage(player, "Successfully transferred to " + serverName + "!");
+                player.createConnectionRequest(targetServer).fireAndForget();
+                updateAndSaveLastServer(player, serverName);
+                sendTransferSuccess(player, serverName);
             } else {
-                // Disconnect the player and send them to the new server
-                player.createConnectionRequest(serverOptional.get()).connectWithIndication().thenAccept(success -> {
+                player.createConnectionRequest(targetServer).connectWithIndication().thenAccept(success -> {
                     if (success) {
-                        sendMessage(player, "Successfully transferred to " + serverName + "!");
+                        updateAndSaveLastServer(player, serverName);
+                        sendTransferSuccess(player, serverName);
                     } else {
-                        sendMessage(player, "Failed to transfer to " + serverName + ".");
+                        sendTransferFailure(player, serverName);
                     }
                 });
             }
         }).exceptionally(throwable -> {
             logger.error("Failed to ping server {} to get version", serverName, throwable);
-            sendMessage(player, "Failed to get server version for " + serverName + ".");
+            sendPingFailure(player, serverName);
             return null;
         });
     }
 
-    private void sendMessage(Player player, String message) {
+    private void updateAndSaveLastServer(Player player, String serverName) {
+        plugin.getLastServerData().put(player.getUniqueId(), serverName);
+        plugin.getServer().getScheduler().buildTask(plugin, plugin::saveLastServerData).schedule();
+    }
+
+    private void sendTransferSuccess(Player player, String serverName) {
         Locale locale = player.getEffectiveLocale();
-        if (locale != null && locale.getLanguage().equals("de")) {
-            // Translate the message to German
-            if (message.contains("Successfully transferred to")) {
-                message = "Erfolgreich zu " + message.split("to ")[1] + " gewechselt!";
-            } else if (message.contains("Failed to transfer to")) {
-                message = "Fehler beim Wechseln zu " + message.split("to ")[1] + ".";
-            } else if (message.contains("Failed to get server version for")) {
-                message = "Fehler beim Abrufen der Serverversion für " + message.split("for ")[1] + ".";
-            }
-        }
+        String message = (locale != null && locale.getLanguage().equals("de"))
+                ? "Erfolgreich zu " + serverName + " gewechselt!"
+                : "Successfully transferred to " + serverName + "!";
+        player.sendMessage(Component.text(message));
+    }
+
+    private void sendTransferFailure(Player player, String serverName) {
+        Locale locale = player.getEffectiveLocale();
+        String message = (locale != null && locale.getLanguage().equals("de"))
+                ? "Fehler beim Wechseln zu " + serverName + "."
+                : "Failed to transfer to " + serverName + ".";
+        player.sendMessage(Component.text(message));
+    }
+
+    private void sendPingFailure(Player player, String serverName) {
+        Locale locale = player.getEffectiveLocale();
+        String message = (locale != null && locale.getLanguage().equals("de"))
+                ? "Fehler beim Abrufen der Serverversion für " + serverName + "."
+                : "Failed to get server version for " + serverName + ".";
         player.sendMessage(Component.text(message));
     }
 
