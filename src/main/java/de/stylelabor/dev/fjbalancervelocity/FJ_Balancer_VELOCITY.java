@@ -4,12 +4,12 @@ import com.google.inject.Inject;
 import com.velocitypowered.api.event.Subscribe;
 import com.velocitypowered.api.event.connection.DisconnectEvent;
 import com.velocitypowered.api.event.connection.PostLoginEvent;
+import com.velocitypowered.api.event.player.PlayerChooseInitialServerEvent;
 import com.velocitypowered.api.event.proxy.ProxyInitializeEvent;
 import com.velocitypowered.api.plugin.Plugin;
 import com.velocitypowered.api.proxy.Player;
 import com.velocitypowered.api.proxy.ProxyServer;
 import com.velocitypowered.api.proxy.server.RegisteredServer;
-import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
 import org.slf4j.Logger;
 import org.yaml.snakeyaml.Yaml;
@@ -19,6 +19,7 @@ import java.io.FileReader;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -26,7 +27,7 @@ import java.util.concurrent.TimeUnit;
 @Plugin(
         id = "fj-balancer-velocity",
         name = "FJ-Balancer-VELOCITY",
-        version = "0.2"
+        version = "20.07.2026"
 )
 public class FJ_Balancer_VELOCITY {
 
@@ -37,8 +38,8 @@ public class FJ_Balancer_VELOCITY {
     private ProxyServer server;
 
     private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
-    private Set<UUID> joinedPlayers;
-    private Map<UUID, String> lastServerData;
+    private Set<UUID> joinedPlayers = ConcurrentHashMap.newKeySet();
+    private Map<UUID, String> lastServerData = new ConcurrentHashMap<>();
     private File joinedPlayersFile = new File("plugins/Markap-FJ-BALANCER/joinedPlayers.yml");
     private File lastServerFile = new File("plugins/Markap-FJ-BALANCER/last-server-data.yml");
 
@@ -56,7 +57,7 @@ public class FJ_Balancer_VELOCITY {
 
         File dir = new File("plugins/Markap-FJ-BALANCER");
         if (!dir.exists()) {
-            boolean dirCreated = dir.mkdirs(); // This creates the directory if it doesn't exist
+            boolean dirCreated = dir.mkdirs();
             if (!dirCreated) {
                 logger.error("Failed to create directory");
                 return;
@@ -64,9 +65,6 @@ public class FJ_Balancer_VELOCITY {
         }
         joinedPlayersFile = new File(dir, "joinedPlayers.yml");
         lastServerFile = new File(dir, "last-server-data.yml");
-
-        joinedPlayers = new HashSet<>(); // Initialize joinedPlayers to an empty set
-        lastServerData = new HashMap<>(); // Initialize lastServerData to an empty map
 
         if (joinedPlayersFile.exists()) {
             try (FileReader reader = new FileReader(joinedPlayersFile)) {
@@ -108,11 +106,17 @@ public class FJ_Balancer_VELOCITY {
     }
 
     public void setJoinedPlayers(Set<UUID> joinedPlayers) {
-        this.joinedPlayers = joinedPlayers;
+        this.joinedPlayers = ConcurrentHashMap.newKeySet();
+        if (joinedPlayers != null) {
+            this.joinedPlayers.addAll(joinedPlayers);
+        }
     }
 
     public void setLastServerData(Map<UUID, String> lastServerData) {
-        this.lastServerData = lastServerData;
+        this.lastServerData = new ConcurrentHashMap<>();
+        if (lastServerData != null) {
+            this.lastServerData.putAll(lastServerData);
+        }
     }
 
     public Map<UUID, String> getLastServerData() {
@@ -126,10 +130,51 @@ public class FJ_Balancer_VELOCITY {
     public void saveLastServerData() {
         try (FileWriter writer = new FileWriter(lastServerFile)) {
             Yaml yaml = new Yaml();
-            yaml.dump(lastServerData, writer);
+            yaml.dump(new HashMap<>(lastServerData), writer);
             logger.info("Saved last server data to file.");
         } catch (IOException e) {
             logger.error("Failed to save last server data", e);
+        }
+    }
+
+    public void saveJoinedPlayers() {
+        if (!joinedPlayers.isEmpty()) {
+            try (FileWriter writer = new FileWriter(joinedPlayersFile)) {
+                Yaml yaml = new Yaml();
+                yaml.dump(new ArrayList<>(joinedPlayers), writer);
+                logger.info("Saved joined players to file");
+            } catch (IOException e) {
+                logger.error("Failed to save joined players", e);
+            }
+        }
+    }
+
+    @Subscribe
+    public void onChooseInitialServer(PlayerChooseInitialServerEvent event) {
+        Player player = event.getPlayer();
+
+        if (!joinedPlayers.contains(player.getUniqueId())) {
+            joinedPlayers.add(player.getUniqueId());
+            logger.info("Player {} joined for the first time", player.getUsername());
+
+            Optional<RegisteredServer> minPlayerServer = server.getAllServers().stream()
+                    .min(Comparator.comparingInt(server2 -> server2.getPlayersConnected().size()));
+            minPlayerServer.ifPresent(targetServer -> {
+                event.setInitialServer(targetServer);
+                logger.info("Player {} routed to least loaded server {}", player.getUsername(), targetServer.getServerInfo().getName());
+            });
+
+            scheduler.execute(this::saveJoinedPlayers);
+        } else {
+            logger.info("Player {} has already joined before", player.getUsername());
+            String lastServer = lastServerData.get(player.getUniqueId());
+            if (lastServer != null) {
+                Optional<RegisteredServer> registeredServer = server.getServer(lastServer);
+                registeredServer.ifPresent(targetServer -> {
+                    event.setInitialServer(targetServer);
+                    logger.info("Player {} routed to last server {}", player.getUsername(), targetServer.getServerInfo().getName());
+                });
+            }
         }
     }
 
@@ -139,14 +184,7 @@ public class FJ_Balancer_VELOCITY {
         player.getCurrentServer().ifPresent(serverConnection -> {
             String serverName = serverConnection.getServerInfo().getName();
             lastServerData.put(player.getUniqueId(), serverName);
-            try (FileWriter writer = new FileWriter(lastServerFile)) {
-                Yaml yaml = new Yaml();
-                yaml.dump(lastServerData, writer);
-                //noinspection LoggingSimilarMessage
-                logger.info("Saved last server data to file. - onPlayerDisconnect");
-            } catch (IOException e) {
-                logger.error("Failed to save last server data", e);
-            }
+            scheduler.execute(this::saveLastServerData);
         });
     }
 
@@ -156,7 +194,8 @@ public class FJ_Balancer_VELOCITY {
                 Yaml yaml = new Yaml();
                 Set<UUID> loadedPlayers = yaml.load(reader);
                 if (loadedPlayers != null) {
-                    joinedPlayers = new HashSet<>(loadedPlayers);
+                    joinedPlayers.clear();
+                    joinedPlayers.addAll(loadedPlayers);
                 }
                 logger.info("[AUTO-RELOAD] Reloaded joined players from file");
             } catch (IOException e) {
@@ -167,7 +206,8 @@ public class FJ_Balancer_VELOCITY {
                 Yaml yaml = new Yaml();
                 Map<UUID, String> loadedLastServerData = yaml.load(reader);
                 if (loadedLastServerData != null) {
-                    lastServerData = new HashMap<>(loadedLastServerData);
+                    lastServerData.clear();
+                    lastServerData.putAll(loadedLastServerData);
                 }
                 logger.info("[AUTO-RELOAD] Reloaded last server data from file");
             } catch (IOException e) {
@@ -192,74 +232,5 @@ public class FJ_Balancer_VELOCITY {
 
         // Schedule the message to be sent after 5 seconds
         scheduler.schedule(() -> player.sendMessage(LegacyComponentSerializer.legacyAmpersand().deserialize(message)), 5, TimeUnit.SECONDS);
-
-        balancePlayerOnFirstJoin(player);
-    }
-
-    private void balancePlayerOnFirstJoin(Player player) {
-        if (!joinedPlayers.contains(player.getUniqueId())) {
-            joinedPlayers.add(player.getUniqueId());
-            logger.info("Player {} joined for the first time", player.getUsername());
-
-            Optional<RegisteredServer> minPlayerServer = server.getAllServers().stream()
-                    .min(Comparator.comparingInt(server2 -> server2.getPlayersConnected().size()));
-            minPlayerServer.ifPresent(server -> {
-                if (player.getCurrentServer().isEmpty()) {
-                    player.createConnectionRequest(server).fireAndForget();
-                    logger.info("Player {} sent to server {}", player.getUsername(), server.getServerInfo().getName());
-                } else {
-                    logger.info("Player {} is already connected to a server", player.getUsername());
-                }
-            });
-
-            saveJoinedPlayers();
-        } else {
-            logger.info("Player {} has already joined before", player.getUsername());
-            String lastServer = lastServerData.get(player.getUniqueId());
-            if (lastServer != null) {
-                Optional<RegisteredServer> registeredServer = server.getServer(lastServer);
-                registeredServer.ifPresent(server -> {
-                    if (player.getCurrentServer().isPresent()) {
-                        player.disconnect(Component.text("Transferring you to " + lastServer + "! Please reconnect."));
-                        retryConnection(player, server, 10, 5); // Retry 5 times with a 10-second delay
-                    } else {
-                        player.createConnectionRequest(server).fireAndForget();
-                        logger.info("Player {} sent to last server {}", player.getUsername(), server.getServerInfo().getName());
-                    }
-                });
-            }
-        }
-    }
-
-    private void retryConnection(Player player, RegisteredServer server, int delaySeconds, int maxRetries) {
-        scheduler.schedule(() -> {
-            if (maxRetries > 0) {
-                player.createConnectionRequest(server).connectWithIndication().thenAccept(success -> {
-                    if (!success) {
-                        logger.warn("Failed to transfer player {} to server {}. Retrying... ({} attempts left)", player.getUsername(), server.getServerInfo().getName(), maxRetries - 1);
-                        player.sendMessage(Component.text("Retrying transfer to " + server.getServerInfo().getName() + "... (" + (maxRetries - 1) + " attempts left)"));
-                        retryConnection(player, server, delaySeconds, maxRetries - 1);
-                    } else {
-                        logger.info("Player {} successfully transferred to server {}", player.getUsername(), server.getServerInfo().getName());
-                        player.sendMessage(Component.text("Successfully transferred to " + server.getServerInfo().getName() + "!"));
-                    }
-                });
-            } else {
-                logger.error("Failed to transfer player {} to server {} after multiple attempts.", player.getUsername(), server.getServerInfo().getName());
-                player.sendMessage(Component.text("Failed to transfer you to " + server.getServerInfo().getName() + " after multiple attempts."));
-            }
-        }, delaySeconds, TimeUnit.SECONDS);
-    }
-
-    private void saveJoinedPlayers() {
-        if (!joinedPlayers.isEmpty()) {
-            try (FileWriter writer = new FileWriter(joinedPlayersFile)) {
-                Yaml yaml = new Yaml();
-                yaml.dump(joinedPlayers, writer);
-                logger.info("Saved joined players to file");
-            } catch (IOException e) {
-                logger.error("Failed to save joined players", e);
-            }
-        }
     }
 }

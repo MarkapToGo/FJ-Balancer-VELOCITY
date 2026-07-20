@@ -6,7 +6,7 @@
 
     <groupId>de.stylelabor.dev</groupId>
     <artifactId>FJ-Balancer-VELOCITY</artifactId>
-    <version>1</version>
+    <version>20.07.2026</version>
     <packaging>jar</packaging>
 
     <name>FJ-Balancer-VELOCITY</name>
