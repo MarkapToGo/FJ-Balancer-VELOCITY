@@ -1,6 +1,8 @@
 package de.stylelabor.dev.fjbalancervelocity;
 
 import com.google.inject.Inject;
+import com.velocitypowered.api.command.CommandManager;
+import com.velocitypowered.api.command.CommandMeta;
 import com.velocitypowered.api.event.Subscribe;
 import com.velocitypowered.api.event.connection.DisconnectEvent;
 import com.velocitypowered.api.event.connection.PostLoginEvent;
@@ -20,8 +22,6 @@ import java.io.FileWriter;
 import java.io.IOException;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
 @Plugin(
@@ -37,7 +37,6 @@ public class FJ_Balancer_VELOCITY {
     @Inject
     private ProxyServer server;
 
-    private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
     private volatile Set<UUID> joinedPlayers = ConcurrentHashMap.newKeySet();
     private volatile Map<UUID, String> lastServerData = new ConcurrentHashMap<>();
     private File joinedPlayersFile = new File("plugins/Markap-FJ-BALANCER/joinedPlayers.yml");
@@ -46,12 +45,17 @@ public class FJ_Balancer_VELOCITY {
     @Subscribe
     public void onProxyInitialization(ProxyInitializeEvent event) {
 
-        // Schedule the task to reload data every minute
-        scheduler.scheduleAtFixedRate(this::reloadDataFromFile, 0, 60, TimeUnit.SECONDS);
+        CommandManager commandManager = server.getCommandManager();
+        CommandMeta reloadMeta = commandManager.metaBuilder("fjv-reload").build();
+        CommandMeta switchMeta = commandManager.metaBuilder("stylelabor-server").aliases("switch-server").build();
 
-        server.getCommandManager().register("fjv-reload", new ReloadCommand(this, logger));
-        server.getCommandManager().register("stylelabor-server", new StylelaborServerCommand(this, logger));
-        server.getCommandManager().register("switch-server", new StylelaborServerCommand(this, logger));
+        commandManager.register(reloadMeta, new ReloadCommand(this, logger));
+        commandManager.register(switchMeta, new StylelaborServerCommand(this, logger));
+
+        // Schedule the task to reload data every minute using Velocity scheduler
+        server.getScheduler().buildTask(this, this::reloadDataFromFile)
+                .repeat(60, TimeUnit.SECONDS)
+                .schedule();
 
         logger.info("\n################################\n##                            ##\n##   FJ Balancer [Velocity]   ##\n##      coded by Markap       ##\n##                            ##\n################################");
 
@@ -166,7 +170,7 @@ public class FJ_Balancer_VELOCITY {
                 logger.info("Player {} routed to least loaded server {}", player.getUsername(), targetServer.getServerInfo().getName());
             });
 
-            scheduler.execute(this::saveJoinedPlayers);
+            server.getScheduler().buildTask(this, this::saveJoinedPlayers).schedule();
         } else {
             logger.info("Player {} has already joined before", player.getUsername());
             String lastServer = lastServerData.get(player.getUniqueId());
@@ -186,7 +190,7 @@ public class FJ_Balancer_VELOCITY {
         player.getCurrentServer().ifPresent(serverConnection -> {
             String serverName = serverConnection.getServerInfo().getName();
             lastServerData.put(player.getUniqueId(), serverName);
-            scheduler.execute(this::saveLastServerData);
+            server.getScheduler().buildTask(this, this::saveLastServerData).schedule();
         });
     }
 
@@ -233,7 +237,9 @@ public class FJ_Balancer_VELOCITY {
             message = "&8[&6&lStyleLabor&8] &fHello &e&l" + player.getUsername() + "&f, you can change the server with &f&l/stylelabor-server <server>&f! When this isn't working, use &6/server <server>&f!";
         }
 
-        // Schedule the message to be sent after 5 seconds
-        scheduler.schedule(() -> player.sendMessage(LegacyComponentSerializer.legacyAmpersand().deserialize(message)), 5, TimeUnit.SECONDS);
+        // Schedule the message to be sent after 5 seconds using Velocity scheduler
+        server.getScheduler().buildTask(this, () -> player.sendMessage(LegacyComponentSerializer.legacyAmpersand().deserialize(message)))
+                .delay(5, TimeUnit.SECONDS)
+                .schedule();
     }
 }
