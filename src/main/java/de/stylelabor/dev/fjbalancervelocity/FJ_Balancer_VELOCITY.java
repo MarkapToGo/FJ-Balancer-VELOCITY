@@ -15,11 +15,14 @@ import com.velocitypowered.api.proxy.server.RegisteredServer;
 import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
 import org.slf4j.Logger;
 import org.yaml.snakeyaml.Yaml;
+import org.yaml.snakeyaml.error.YAMLException;
 
 import java.io.File;
 import java.io.FileReader;
-import java.io.FileWriter;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
@@ -70,35 +73,7 @@ public class FJ_Balancer_VELOCITY {
         joinedPlayersFile = new File(dir, "joinedPlayers.yml");
         lastServerFile = new File(dir, "last-server-data.yml");
 
-        if (joinedPlayersFile.exists()) {
-            try (FileReader reader = new FileReader(joinedPlayersFile)) {
-                Yaml yaml = new Yaml();
-                Set<UUID> loadedPlayers = yaml.load(reader);
-                if (loadedPlayers != null) {
-                    joinedPlayers.addAll(loadedPlayers);
-                }
-                logger.info("Loaded joined players from file");
-            } catch (IOException e) {
-                logger.error("Failed to load joined players", e);
-            }
-        } else {
-            logger.info("File does not exist, no players loaded");
-        }
-
-        if (lastServerFile.exists()) {
-            try (FileReader reader = new FileReader(lastServerFile)) {
-                Yaml yaml = new Yaml();
-                Map<UUID, String> loadedLastServerData = yaml.load(reader);
-                if (loadedLastServerData != null) {
-                    lastServerData.putAll(loadedLastServerData);
-                }
-                logger.info("Loaded last server data from file");
-            } catch (IOException e) {
-                logger.error("Failed to load last server data", e);
-            }
-        } else {
-            logger.info("File does not exist, no last server data loaded");
-        }
+        reloadDataFromFile();
     }
 
     public File getJoinedPlayersFile() {
@@ -134,9 +109,14 @@ public class FJ_Balancer_VELOCITY {
     }
 
     public synchronized void saveLastServerData() {
-        try (FileWriter writer = new FileWriter(lastServerFile)) {
+        Path path = lastServerFile.toPath();
+        try (var writer = Files.newBufferedWriter(path, StandardCharsets.UTF_8)) {
             Yaml yaml = new Yaml();
-            yaml.dump(new HashMap<>(lastServerData), writer);
+            Map<String, String> serializable = new TreeMap<>();
+            for (Map.Entry<UUID, String> entry : lastServerData.entrySet()) {
+                serializable.put(entry.getKey().toString(), entry.getValue());
+            }
+            yaml.dump(serializable, writer);
             logger.info("Saved last server data to file.");
         } catch (IOException e) {
             logger.error("Failed to save last server data", e);
@@ -145,9 +125,14 @@ public class FJ_Balancer_VELOCITY {
 
     public synchronized void saveJoinedPlayers() {
         if (!joinedPlayers.isEmpty()) {
-            try (FileWriter writer = new FileWriter(joinedPlayersFile)) {
+            Path path = joinedPlayersFile.toPath();
+            try (var writer = Files.newBufferedWriter(path, StandardCharsets.UTF_8)) {
                 Yaml yaml = new Yaml();
-                yaml.dump(new ArrayList<>(joinedPlayers), writer);
+                List<String> serializable = joinedPlayers.stream()
+                        .map(UUID::toString)
+                        .sorted()
+                        .toList();
+                yaml.dump(serializable, writer);
                 logger.info("Saved joined players to file");
             } catch (IOException e) {
                 logger.error("Failed to save joined players", e);
@@ -194,35 +179,117 @@ public class FJ_Balancer_VELOCITY {
         });
     }
 
-    private synchronized void reloadDataFromFile() {
-        if (joinedPlayersFile.exists() && lastServerFile.exists()) {
-            try (FileReader reader = new FileReader(joinedPlayersFile)) {
-                Yaml yaml = new Yaml();
-                Set<UUID> loadedPlayers = yaml.load(reader);
-                if (loadedPlayers != null) {
-                    Set<UUID> newJoined = ConcurrentHashMap.newKeySet();
-                    newJoined.addAll(loadedPlayers);
-                    this.joinedPlayers = newJoined;
-                }
+    public synchronized void reloadDataFromFile() {
+        if (joinedPlayersFile.exists()) {
+            try {
+                Set<UUID> loadedPlayers = loadJoinedPlayers(joinedPlayersFile);
+                Set<UUID> newJoined = ConcurrentHashMap.newKeySet();
+                newJoined.addAll(loadedPlayers);
+                this.joinedPlayers = newJoined;
                 logger.info("[AUTO-RELOAD] Reloaded joined players from file");
-            } catch (IOException e) {
+            } catch (IOException | YAMLException e) {
                 logger.error("[AUTO-RELOAD] Failed to reload joined players", e);
             }
+        } else {
+            logger.info("File does not exist, no players loaded");
+        }
 
-            try (FileReader reader = new FileReader(lastServerFile)) {
-                Yaml yaml = new Yaml();
-                Map<UUID, String> loadedLastServerData = yaml.load(reader);
-                if (loadedLastServerData != null) {
-                    Map<UUID, String> newLastServerData = new ConcurrentHashMap<>(loadedLastServerData);
-                    this.lastServerData = newLastServerData;
-                }
+        if (lastServerFile.exists()) {
+            try {
+                Map<UUID, String> loadedLastServerData = loadLastServerData(lastServerFile);
+                this.lastServerData = new ConcurrentHashMap<>(loadedLastServerData);
                 logger.info("[AUTO-RELOAD] Reloaded last server data from file");
-            } catch (IOException e) {
+            } catch (IOException | YAMLException e) {
                 logger.error("[AUTO-RELOAD] Failed to reload last server data", e);
             }
         } else {
-            logger.warn("[AUTO-RELOAD] Skipped reloading because one or both files do not exist");
+            logger.info("File does not exist, no last server data loaded");
         }
+    }
+
+    private Set<UUID> loadJoinedPlayers(File file) throws IOException {
+        String content = Files.readString(file.toPath(), StandardCharsets.UTF_8);
+        String normalized = stripLegacyUuidTags(content);
+        Yaml yaml = new Yaml();
+        Object loaded = yaml.load(normalized);
+
+        Set<UUID> result = new HashSet<>();
+        if (loaded == null) {
+            return result;
+        }
+        if (loaded instanceof Iterable<?> iterable) {
+            for (Object value : iterable) {
+                UUID uuid = parseUuid(value);
+                if (uuid != null) {
+                    result.add(uuid);
+                } else {
+                    logger.warn("Skipping invalid joined player UUID value: {}", value);
+                }
+            }
+            return result;
+        }
+
+        if (loaded instanceof Map<?, ?> map) {
+            for (Object key : map.keySet()) {
+                UUID uuid = parseUuid(key);
+                if (uuid != null) {
+                    result.add(uuid);
+                } else {
+                    logger.warn("Skipping invalid joined player UUID key: {}", key);
+                }
+            }
+            return result;
+        }
+
+        logger.warn("Unexpected joined players format in {}", file.getName());
+        return result;
+    }
+
+    private Map<UUID, String> loadLastServerData(File file) throws IOException {
+        String content = Files.readString(file.toPath(), StandardCharsets.UTF_8);
+        String normalized = stripLegacyUuidTags(content);
+        Yaml yaml = new Yaml();
+        Object loaded = yaml.load(normalized);
+
+        Map<UUID, String> result = new HashMap<>();
+        if (loaded == null) {
+            return result;
+        }
+        if (!(loaded instanceof Map<?, ?> map)) {
+            logger.warn("Unexpected last server data format in {}", file.getName());
+            return result;
+        }
+
+        for (Map.Entry<?, ?> entry : map.entrySet()) {
+            UUID uuid = parseUuid(entry.getKey());
+            if (uuid == null) {
+                logger.warn("Skipping invalid last server UUID key: {}", entry.getKey());
+                continue;
+            }
+            if (entry.getValue() == null) {
+                continue;
+            }
+            result.put(uuid, entry.getValue().toString());
+        }
+        return result;
+    }
+
+    private UUID parseUuid(Object value) {
+        if (value instanceof UUID uuid) {
+            return uuid;
+        }
+        if (value == null) {
+            return null;
+        }
+        try {
+            return UUID.fromString(value.toString().trim());
+        } catch (IllegalArgumentException ignored) {
+            return null;
+        }
+    }
+
+    private String stripLegacyUuidTags(String content) {
+        return content.replace("!!java.util.UUID ", "");
     }
 
     @Subscribe
